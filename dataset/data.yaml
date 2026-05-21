@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 1
+names: ['spur gear']
+
+roboflow:
+  workspace: wcjebols-workspace-vsisr
+  project: wcjebols-workspace-vsisr
+  version: dataset
+  license: Private
+  url: https://app.roboflow.com/wcjebols-workspace-vsisr/wcjebols-workspace-vsisr/dataset
