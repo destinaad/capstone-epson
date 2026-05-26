@@ -1,8 +1,7 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { API_BASE_URL, api } from '../api/client';
 import { Camera, Pencil, ShieldCheck } from 'lucide-react';
-import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
-import { useInspections } from '../hooks/useInspections';
 import { useParts } from '../hooks/useParts';
 import {
   canEditInspection,
@@ -308,11 +307,33 @@ function EditModal({ row, user, onClose, onSaved }) {
   );
 }
 
+const INSPECTION_POLL_MS = 3000;
+
 export default function DashboardPage() {
   const { user } = useAuth();
-  const { rows, error, loading, reload } = useInspections();
   const { parts } = useParts();
+  const [rows, setRows] = useState([]);
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null);
+
+  const reload = useCallback(async () => {
+    try {
+      const { data } = await api.get('/inspections/');
+      setRows(data);
+      setError(null);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    reload();
+    const id = setInterval(reload, INSPECTION_POLL_MS);
+    return () => clearInterval(id);
+  }, [reload]);
 
   const latest = rows[0] ?? null;
   const showLog = canLogInspection(user);
@@ -360,7 +381,8 @@ export default function DashboardPage() {
         </div>
         {error && (
           <p className="mb-2 text-sm text-qc-ng">
-            Failed to load inspections. Ensure the API is running.
+            Unable to reach the production API at {API_BASE_URL}. Check your
+            network connection or try again shortly.
           </p>
         )}
         <div className="overflow-x-auto rounded-xl border border-white/10">

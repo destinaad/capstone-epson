@@ -1,34 +1,63 @@
+import os
+
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
+
 import hmac
+import time
 from typing import Optional
 from uuid import UUID
 
 import bcrypt
-from fastapi import Depends, FastAPI, HTTPException, UploadFile, File
+import cv2
+import numpy as np
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from ultralytics import YOLO
-import cv2
-import numpy as np
-import time
 
+import models
 import schemas
 from database import engine, get_db
-import models
 
 models.Base.metadata.create_all(bind=engine)
 
-# Laoding model YOLO dari folder models
-model = YOLO("ml_models/best.pt")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_DIR = os.path.join(BASE_DIR, "ml_models", "best")
+
+_yolo_model: Optional[YOLO] = None
+
+
+def _model_weights_ready() -> bool:
+    return os.path.isdir(MODEL_DIR) and os.path.isfile(
+        os.path.join(MODEL_DIR, "data.pkl")
+    )
+
+
+def get_yolo_model() -> YOLO:
+    global _yolo_model
+    if _yolo_model is None:
+        if not _model_weights_ready():
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"YOLO weights not found at {MODEL_DIR}. "
+                    "Place the ComVis model directory (data.pkl, version, .data/, etc.) in ml_models/best/."
+                ),
+            )
+        _yolo_model = YOLO(MODEL_DIR)
+    return _yolo_model
+
 
 app = FastAPI(title="Epson QC System API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  
+    allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 def verify_password(plain: str, stored_hash: str) -> bool:
     if stored_hash.startswith("$2"):
@@ -121,69 +150,85 @@ def create_inspection(
     return new_inspection
 
 
-
-@app.post("/inspections/scan", response_model=schemas.InspectionResponse, tags=["Live AI Scan"])
+@app.post(
+    "/inspections/scan",
+    response_model=schemas.InspectionResponse,
+    tags=["Live AI Scan"],
+)
 async def scan_inspection_live(
-    file: UploadFile = File(...), 
+    file: UploadFile = File(...),
     part_id: int = 1,
-    operator_id: int = 1, 
+    operator_id: int = 1,
     shift: int = 1,
     actual_weight: float = 40.5,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    # 1. Validasi format file harus berupa gambar
-    if not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="File yang diunggah harus berupa gambar!")
-    
-    # 2. Cek apakah part_id terdaftar di database untuk menghitung selisih target
+    if file.content_type and not file.content_type.startswith("image/"):
+        raise HTTPException(
+            status_code=400,
+            detail="File yang diunggah harus berupa gambar!",
+        )
+
     part = db.query(models.Part).filter(models.Part.id == part_id).first()
     if not part:
-        raise HTTPException(status_code=404, detail="Part ID tidak ditemukan di database.")
-    
+        raise HTTPException(
+            status_code=404,
+            detail="Part ID tidak ditemukan di database.",
+        )
+
     try:
         start_time = time.time()
-        
-        # 3. Baca gambar dari memori buffer tanpa simpan ke storage disk
+
         contents = await file.read()
         nparr = np.frombuffer(contents, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        
-        # 4. Jalankan inferensi deteksi objek model YOLO best.pt
-        results = model(img)
+        if img is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Gambar tidak dapat dibaca. Pastikan file berformat JPEG/PNG.",
+            )
+
+        yolo = get_yolo_model()
+        results = yolo(img)
         result = results[0]
-        
-        # 5. Hitung statistik hasil bounding box YOLO
+
         detected_quantity = len(result.boxes)
-        confidences = result.boxes.conf.tolist() if len(result.boxes) > 0 else [0]
+        confidences = (
+            result.boxes.conf.tolist() if detected_quantity > 0 else [0.0]
+        )
         ai_confidence_score = float(np.mean(confidences) * 100)
         process_duration = float(time.time() - start_time)
-        
-        # 6. Hitung tingkat kecocokan (Discrepancy) berdasarkan rumus bawaan kodinganmu
+
         discrepancy = detected_quantity - part.target_quantity
         status = "OK" if discrepancy == 0 else "NG"
-        
-        # 7. Simpan hasil kalkulasi AI otomatis ke tabel Supabase via SQLAlchemy
+
         new_inspection = models.Inspection(
             part_id=part_id,
             operator_id=operator_id,
             detected_quantity=detected_quantity,
             actual_weight=actual_weight,
-            image_url="https://capstone-epson-production.up.railway.app/placeholder.jpg", # Placeholder image link
+            image_url=None,
             ai_confidence_score=ai_confidence_score,
             process_duration=process_duration,
             shift=shift,
             status=status,
-            discrepancy=discrepancy
+            discrepancy=discrepancy,
         )
-        
+
         db.add(new_inspection)
         db.commit()
         db.refresh(new_inspection)
         return new_inspection
-        
+
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Gagal memproses gambar AI: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Gagal memproses gambar AI: {str(e)}",
+        )
 
 
 @app.patch(

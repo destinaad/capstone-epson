@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api/client';
 
-export function useInspections(pollMs = 12000) {
+const POLL_INTERVAL_MS = 3000;
+
+export function useInspections(pollMs = POLL_INTERVAL_MS) {
   const [rows, setRows] = useState([]);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);

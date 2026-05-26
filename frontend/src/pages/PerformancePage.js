@@ -8,6 +8,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import { API_BASE_URL } from '../api/client';
 import { useInspections } from '../hooks/useInspections';
 import { useAuth } from '../context/AuthContext';
 import { isManager } from '../utils/roles';
@@ -66,8 +67,8 @@ export default function PerformancePage() {
       )}
       {error && (
         <p className="text-sm text-qc-ng">
-          Could not load inspections. Is the API running at{' '}
-          {process.env.REACT_APP_API_URL || 'http://localhost:8000'}?
+          Unable to reach the production API at {API_BASE_URL}. Check your
+          network connection or try again shortly.
         </p>
       )}
 
