@@ -5,7 +5,7 @@ psycopg2-binary
 pydantic
 bcrypt
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.5.1+cpu
-torchvision==0.21.0+cpu
-ultralytics==8.3.0
+torch --index-url https://download.pytorch.org/whl/cpu
+torchvision --index-url https://download.pytorch.org/whl/cpu
+ultralytics
 opencv-python-headless
